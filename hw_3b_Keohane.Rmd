@@ -1,0 +1,128 @@
+---
+title: "hw_3b_Keohane"
+author: "Isaac Keohane"
+date: "3/18/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_chunk$set(fig.width=6, fig.asp = 0.618, collapse=TRUE) 
+```
+
+```{r packages, message=FALSE}
+library(tidyverse)
+library(palmerpenguins)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(gvlma)
+```
+#### Introduction
+I came into this problem of predicting the penguin body masses thinking I was going to apply a multiple regression model.  Because the goal here is prediction, I wanted to include all the variables that appeared somewhat correlated to body mass without too much consideration for the specific statistical relationship of each individual independent variable to body mass. 
+
+
+#### Looking at the original data
+As usual, I began by just looking at the data overall, just to remind myself which variables we have and how many different levels of each factor variable there are.
+```{r peek at data}
+glimpse(penguins)
+summary(penguins)
+```
+#### Exploratory data analysis
+I took a pretty simple approach to the exploratory data analysis for thinking about developing a predictive model.  I knew coming into this problem that I was probably going to go in the direction of a multivariate linear regression model.  There are multiple independent variables (flipper length, bill length, bill depth, sex, species, island).  I plotted histograms of body mass as a representative physical measurement to see how the distribution of physical traits varied between the categorical variable of species, sex, and island.  These histograms show decently normal distributions in body mass, with clearly different means for different sexes and species.  This indicated to me that I should include species and sex as categorical variables in the regression model since there is clearly variation in the distributions of body mass between them.
+
+```{r histograms}
+ggplot(aes(x=body_mass_g), data=penguins %>% drop_na() %>% filter(sex=="male")) +
+  geom_histogram(bins=15) +
+  facet_wrap(island~species) +
+  labs(title="male")
+
+ggplot(aes(x=body_mass_g), data=penguins %>% drop_na() %>% filter(sex=="female")) +
+  geom_histogram(bins=15) +
+  facet_wrap(island~species) +
+  labs(title="female")
+```
+
+I couldn't tell from visually inspecting the histograms if the island variable was causing significant variation, so I applied a t-test to the different island body mass distributions, controlling for a single species and sex.  The P values were very large, indicating that there is no evidence island causes different distributions in body mass in this selected data set.  Because I could not observe any variation in body mass between the islands, I did not include it as an independent variable in the regression model.
+```{r check sex and island}
+penguins %>% filter(species=="Adelie",sex=="male") %>%
+  t_test(body_mass_g ~ island) 
+```
+#### Multiple regression
+I wanted to compare a multiple regression model with all of the variables I chose to a simpler one without the use of categorical variables.  I used lm to create this, creating one model that was controlled for species and sex (Adelie, male).  If this type of model was going to be used for the actual end-user case, one of each of these models would have to be made for each combination of species and sex.  I thought that potentially by isolating each population individually, a better relationship between the measurable independent variables and body mass could be found.  However, looking at the results of this model, the $R^2$ value is extremely low, suggesting this model is not very accurate.  Also, in the summary of this lm, the p value for the coefficients are pretty large, suggesting they are not necessarily statistically significant as indicators of the relationship between the variables and body mass.
+```{r multiple regression without categoricals}
+data_lm =  penguins %>% drop_na() 
+lm_multi_noCat = lm(body_mass_g ~ bill_length_mm + bill_depth_mm +
+                flipper_length_mm, data=data_lm %>% filter(species=="Adelie",sex=="male"))
+                
+summary(lm_multi_noCat)
+
+data_lm_multi_noCat = lm_multi_noCat %>% augment(se_fit=TRUE) %>% 
+  mutate(lwr = .fitted - 1.96 * .se.fit, upr = .fitted + 1.96 * .se.fit, pred=.fitted)
+
+glimpse(data_lm_multi_noCat %>% select(body_mass_g,pred,lwr,upr))
+
+```
+I then created a new multiple regression model including the categorical variables of sex and species.  The resulting $R^2$ value for the predictions was much higher (>.8) and therefore supportive of this model being useful for predicting body mass.  Also, the p-values for the coefficients all suggest they are at least somewhat significant (<0.5).  
+
+I then used gvlma (global validation of linear model assumptions) to provide some idea of the assumptions in each model.  The multiple regression model with the categorical variables, the one with the much better $R^2$, did fail one of the assumption tests: link function.  This does make some sense to me as this test looks at continuity in the dependent variable, and because of the discrete sexes and species I wouldn't expect the output variable to be continuous.  I'm sure there is a better type of model to do this prediction that acconts for this specifically, but failing this assumption test did not suprprise me or worry me too much.
+```{r multiple regression with categoricals}
+lm_multi_wCat = lm(body_mass_g ~ bill_length_mm + bill_depth_mm +
+                flipper_length_mm + species + sex, data=data_lm)
+                
+summary(lm_multi_wCat)
+
+data_lm_multi_wCat = lm_multi_wCat %>% augment(se_fit=TRUE) %>% 
+  mutate(lwr = .fitted - 1.96 * .se.fit, upr = .fitted + 1.96 * .se.fit, pred=.fitted)
+
+glimpse(data_lm_multi_wCat %>% select(body_mass_g,pred,lwr,upr))
+
+gvlma(lm_multi_noCat)
+gvlma(lm_multi_wCat)
+```
+#### Plotting the model predictions
+I applied the model predictions to the original data.  Because of the multiple independent variables, it would be impossible to plot the predictions against all variables at once, so I broke these up into 2-d plots across all the different variables.  These plots for one helped show that there does appear to be linear relationships between the body-measurable independent variables and body mass.  But also, by plotting the predictions as well, they show that the model is producing similar relationships between the variables and body mass as is seen in the data. The one thing I noticed here that I don't quite get, is that if these orange error bars are supposed to be 95% confidence intervals why do so many of the actual individual data values fall outside those error bars?
+
+Red dots are predictions, black are data, orange error bars are the predictions +- 1.96*se, blue line is linear relationship of the data to x, pink line is linear relationship of the predictions to x. 
+
+```{r plot predictions on original data, message=FALSE, out.width="100%",fig.asp=1.2}
+
+x_cols=c("bill_length_mm", "bill_depth_mm", "flipper_length_mm")
+plots = c()
+for(col in x_cols){
+    
+  myPlot <- ggplot(data=data_lm_multi_wCat,aes_string(x=col)) +
+              theme_bw() +
+              geom_smooth(aes(y=body_mass_g),method = "lm",se = FALSE) +
+              geom_smooth(aes(y=pred),method = "lm",color="pink",se = FALSE) +
+              geom_point(aes(y=body_mass_g)) +
+              geom_errorbar(aes(ymin=lwr, ymax=upr),color="orange") +
+              geom_point(aes(y = pred), color="red", size = 1) +
+              facet_wrap(species~sex,ncol=2,scales="free")
+  print(paste("x =",col))
+  print(myPlot)
+}
+
+```
+
+#### Predictions  
+After looking at the results of this multiple regression and being satisfied by the $R^2$ value and what I observed in the plots, I applied it to the taxidermy data to produce body mass estimates with 1.96*se upper and lower confidence intervals.
+
+```{r predictions}
+data_predict <- read.csv("data/taxidermy_measurements.csv", header=TRUE)
+
+data_predict <- augment(x=lm_multi_wCat,newdata=data_predict,se_fit=TRUE) %>%
+  mutate(lwr = .fitted - 1.96 *.se.fit, upr = .fitted + 1.96 * .se.fit, pred=.fitted)
+
+knitr::kable(data_predict %>% select(-c(.fitted,year,.se.fit)))
+```
+
+
+
+
+
+
+
+
+
+
